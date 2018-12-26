@@ -54,12 +54,40 @@
 #include "rviz/validate_floats.h"
 #include "rviz/display_context.h"
 
-#include "map_display.h"
+#include "dist_map_display.h"
 
 namespace rviz
 {
 
-MapDisplay::MapDisplay()
+unsigned char* makeDistMapPalette()
+{
+  unsigned char* palette = new unsigned char[256*4];
+  unsigned char* palette_ptr = palette;
+  for( int i = 0; i < 83; i++ )
+  {
+    *palette_ptr++ = i * 3; // red
+    *palette_ptr++ = 0; // green
+    *palette_ptr++ = 0; // blue
+    *palette_ptr++ = 255; // alpha
+  }
+  for( int i = 0; i < 83; i++ )
+  {
+    *palette_ptr++ = 0; // red
+    *palette_ptr++ = i * 3; // green
+    *palette_ptr++ = 0; // blue
+    *palette_ptr++ = 255; // alpha
+  }
+  for( int i = 0; i < 83; i++ )
+  {
+    *palette_ptr++ = 0; // red
+    *palette_ptr++ = 0; // green
+    *palette_ptr++ = i * 3; // blue
+    *palette_ptr++ = 255; // alpha
+  }
+  return palette;
+}
+
+DistMapDisplay::DistMapDisplay()
   : Display()
   , manual_object_( NULL )
   , loaded_( false )
@@ -69,8 +97,8 @@ MapDisplay::MapDisplay()
 {
   connect(this, SIGNAL( mapUpdated() ), this, SLOT( showMap() ));
   topic_property_ = new RosTopicProperty( "Topic", "",
-                                          QString::fromStdString( ros::message_traits::datatype<nav_msgs::OccupancyGrid>() ),
-                                          "nav_msgs::OccupancyGrid topic to subscribe to.",
+                                          QString::fromStdString( ros::message_traits::datatype<fetch_planner_msgs::PlannerSnapshot>() ),
+                                          "fetch_planner_msgs::PlannerSnapshot topic to subscribe to.",
                                           this, SLOT( updateTopic() ));
 
   alpha_property_ = new FloatProperty( "Alpha", 0.7,
@@ -117,149 +145,33 @@ MapDisplay::MapDisplay()
                                            "Prefer UDP topic transport",
                                            this,
                                            SLOT( updateTopic() ));
+  threshold_color_ = new FloatProperty( "Threshold Color", 0.0,
+                                      "At this threshold value the color value will chnage", this );
+  threshold_2_color_ = new FloatProperty( "Threshold 2 Color", 10.0,
+                                      "At this threshold value the color value will chnage", this );
 }
 
-MapDisplay::~MapDisplay()
+DistMapDisplay::~DistMapDisplay()
 {
   unsubscribe();
   clear();
 }
 
-unsigned char* makeMapPalette()
-{
-  unsigned char* palette = new unsigned char[256*4];
-  unsigned char* palette_ptr = palette;
-  // Standard gray map palette values
-  for( int i = 0; i <= 100; i++ )
-  {
-    unsigned char v = 255 - (255 * i) / 100;
-    *palette_ptr++ = v; // red
-    *palette_ptr++ = v; // green
-    *palette_ptr++ = v; // blue
-    *palette_ptr++ = 255; // alpha
-  }
-  // illegal positive values in green
-  for( int i = 101; i <= 127; i++ )
-  {
-    *palette_ptr++ = 0; // red
-    *palette_ptr++ = 255; // green
-    *palette_ptr++ = 0; // blue
-    *palette_ptr++ = 255; // alpha
-  }
-  // illegal negative (char) values in shades of red/yellow
-  for( int i = 128; i <= 254; i++ )
-  {
-    *palette_ptr++ = 255; // red
-    *palette_ptr++ = (255*(i-128))/(254-128); // green
-    *palette_ptr++ = 0; // blue
-    *palette_ptr++ = 255; // alpha
-  }
-  // legal -1 value is tasteful blueish greenish grayish color
-  *palette_ptr++ = 0x70; // red
-  *palette_ptr++ = 0x89; // green
-  *palette_ptr++ = 0x86; // blue
-  *palette_ptr++ = 255; // alpha
 
-  return palette;
-}
-
-unsigned char* makeCostmapPalette()
-{
-  unsigned char* palette = new unsigned char[256*4];
-  unsigned char* palette_ptr = palette;
-
-  // zero values have alpha=0
-  *palette_ptr++ = 0; // red
-  *palette_ptr++ = 0; // green
-  *palette_ptr++ = 0; // blue
-  *palette_ptr++ = 0; // alpha
-
-  // Blue to red spectrum for most normal cost values
-  for( int i = 1; i <= 98; i++ )
-  {
-    unsigned char v = (255 * i) / 100;
-    *palette_ptr++ = v; // red
-    *palette_ptr++ = 0; // green
-    *palette_ptr++ = 255 - v; // blue
-    *palette_ptr++ = 255; // alpha
-  }
-  // inscribed obstacle values (99) in cyan
-  *palette_ptr++ = 0; // red
-  *palette_ptr++ = 255; // green
-  *palette_ptr++ = 255; // blue
-  *palette_ptr++ = 255; // alpha
-  // lethal obstacle values (100) in yellow
-  *palette_ptr++ = 255; // red
-  *palette_ptr++ = 255; // green
-  *palette_ptr++ = 0; // blue
-  *palette_ptr++ = 255; // alpha
-  // illegal positive values in green
-  for( int i = 101; i <= 127; i++ )
-  {
-    *palette_ptr++ = 0; // red
-    *palette_ptr++ = 255; // green
-    *palette_ptr++ = 0; // blue
-    *palette_ptr++ = 255; // alpha
-  }
-  // illegal negative (char) values in shades of red/yellow
-  for( int i = 128; i <= 254; i++ )
-  {
-    *palette_ptr++ = 255; // red
-    *palette_ptr++ = (255*(i-128))/(254-128); // green
-    *palette_ptr++ = 0; // blue
-    *palette_ptr++ = 255; // alpha
-  }
-  // legal -1 value is tasteful blueish greenish grayish color
-  *palette_ptr++ = 0x70; // red
-  *palette_ptr++ = 0x89; // green
-  *palette_ptr++ = 0x86; // blue
-  *palette_ptr++ = 255; // alpha
-
-  return palette;
-}
-
-unsigned char* makeRawPalette()
-{
-  unsigned char* palette = new unsigned char[256*4];
-  unsigned char* palette_ptr = palette;
-  // Standard gray map palette values
-  for( int i = 0; i < 256; i++ )
-  {
-    *palette_ptr++ = i; // red
-    *palette_ptr++ = i; // green
-    *palette_ptr++ = i; // blue
-    *palette_ptr++ = 15; // alpha
-  }
-
-  return palette;
-}
-
-Ogre::TexturePtr makePaletteTexture( unsigned char *palette_bytes )
-{
-  Ogre::DataStreamPtr palette_stream;
-  palette_stream.bind( new Ogre::MemoryDataStream( palette_bytes, 256*4 ));
-
-  static int palette_tex_count = 0;
-  std::stringstream ss;
-  ss << "MapPaletteTexture" << palette_tex_count++;
-  return Ogre::TextureManager::getSingleton().loadRawData( ss.str(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-                                                           palette_stream, 256, 1, Ogre::PF_BYTE_RGBA, Ogre::TEX_TYPE_1D, 0 );
-}
-
-void MapDisplay::onInitialize()
+void DistMapDisplay::onInitialize()
 {
   // Order of palette textures here must match option indices for color_scheme_property_ above.
-  palette_textures_.push_back( makePaletteTexture( makeMapPalette() ));
+  palette_textures_.push_back( rviz::makePaletteTexture( rviz::makeDistMapPalette() ));
   color_scheme_transparency_.push_back( false );
-  palette_textures_.push_back( makePaletteTexture( makeCostmapPalette() ));
-  color_scheme_transparency_.push_back( true );
-  palette_textures_.push_back( makePaletteTexture( makeRawPalette() ));
-  color_scheme_transparency_.push_back( true );
+  // palette_textures_.push_back( rviz::makePaletteTexture( rviz::makeCostmapPalette() ));
+  // color_scheme_transparency_.push_back( true );
+  // palette_textures_.push_back( rviz::makePaletteTexture( rviz::makeRawPalette() ));
+  // color_scheme_transparency_.push_back( true );
 
   // Set up map material
   static int material_count = 0;
   std::stringstream ss;
-  ss << "MapMaterial" << material_count++;
+  ss << "DistMapMaterial" << material_count++;
   material_ = Ogre::MaterialManager::getSingleton().getByName("rviz/Indexed8BitImage");
   material_ = material_->clone( ss.str() );
 
@@ -269,9 +181,9 @@ void MapDisplay::onInitialize()
   material_->setCullingMode( Ogre::CULL_NONE );
   material_->setDepthWriteEnabled(false);
 
-  static int map_count = 0;
+  static int map_count = 1;
   std::stringstream ss2;
-  ss2 << "MapObject" << map_count++;
+  ss2 << "DistMapObject" << map_count++;
   manual_object_ = scene_manager_->createManualObject( ss2.str() );
   scene_node_->attachObject( manual_object_ );
 
@@ -326,18 +238,18 @@ void MapDisplay::onInitialize()
   updateAlpha();
 }
 
-void MapDisplay::onEnable()
+void DistMapDisplay::onEnable()
 {
   subscribe();
 }
 
-void MapDisplay::onDisable()
+void DistMapDisplay::onDisable()
 {
   unsubscribe();
   clear();
 }
 
-void MapDisplay::subscribe()
+void DistMapDisplay::subscribe()
 {
   if ( !isEnabled() )
   {
@@ -350,9 +262,9 @@ void MapDisplay::subscribe()
     {
       if(unreliable_property_->getBool())
       {
-        map_sub_ = update_nh_.subscribe( topic_property_->getTopicStd(), 1, &MapDisplay::incomingMap, this,  ros::TransportHints().unreliable());
+        map_sub_ = update_nh_.subscribe( topic_property_->getTopicStd(), 1, &DistMapDisplay::incomingMap, this,  ros::TransportHints().unreliable());
       }else{
-        map_sub_ = update_nh_.subscribe( topic_property_->getTopicStd(), 1, &MapDisplay::incomingMap, this, ros::TransportHints().reliable() );
+        map_sub_ = update_nh_.subscribe( topic_property_->getTopicStd(), 1, &DistMapDisplay::incomingMap, this, ros::TransportHints().reliable() );
       }
       setStatus( StatusProperty::Ok, "Topic", "OK" );
     }
@@ -363,7 +275,7 @@ void MapDisplay::subscribe()
 
     try
     {
-      update_sub_ = update_nh_.subscribe( topic_property_->getTopicStd() + "_updates", 1, &MapDisplay::incomingUpdate, this );
+      update_sub_ = update_nh_.subscribe( topic_property_->getTopicStd() + "_updates", 1, &DistMapDisplay::incomingUpdate, this );
       setStatus( StatusProperty::Ok, "Update Topic", "OK" );
     }
     catch( ros::Exception& e )
@@ -373,7 +285,7 @@ void MapDisplay::subscribe()
   }
 }
 
-void MapDisplay::unsubscribe()
+void DistMapDisplay::unsubscribe()
 {
   map_sub_.shutdown();
   update_sub_.shutdown();
@@ -395,7 +307,7 @@ private:
   Ogre::Vector4 alpha_vec_;
 };
 
-void MapDisplay::updateAlpha()
+void DistMapDisplay::updateAlpha()
 {
   float alpha = alpha_property_->getFloat();
 
@@ -420,7 +332,7 @@ void MapDisplay::updateAlpha()
   }
 }
 
-void MapDisplay::updateDrawUnder()
+void DistMapDisplay::updateDrawUnder()
 {
   bool draw_under = draw_under_property_->getValue().toBool();
 
@@ -442,14 +354,14 @@ void MapDisplay::updateDrawUnder()
   }
 }
 
-void MapDisplay::updateTopic()
+void DistMapDisplay::updateTopic()
 {
   unsubscribe();
   subscribe();
   clear();
 }
 
-void MapDisplay::clear()
+void DistMapDisplay::clear()
 {
   setStatus( StatusProperty::Warn, "Message", "No map received" );
 
@@ -472,24 +384,30 @@ void MapDisplay::clear()
   loaded_ = false;
 }
 
-bool validateFloats(const nav_msgs::OccupancyGrid& msg)
+void DistMapDisplay::incomingMap(const fetch_planner_msgs::PlannerSnapshot::ConstPtr& msg)
 {
-  bool valid = true;
-  valid = valid && validateFloats( msg.info.resolution );
-  valid = valid && validateFloats( msg.info.origin );
-  return valid;
-}
-
-void MapDisplay::incomingMap(const nav_msgs::OccupancyGrid::ConstPtr& msg)
-{
-  current_map_ = *msg;
+  current_map_ = (*msg).dist_map;
+  avg_ = 0;
+  max_ = 0;
+  int t = 1;
+  std::vector<short unsigned int> map_copy(current_map_.distances);
+  size_t n = map_copy.size() / 2;
+  std::nth_element(map_copy.begin(), map_copy.begin()+n, map_copy.end());
+  median_ = map_copy[n];
+  for(std::vector<short unsigned int>::const_iterator i = current_map_.distances.begin(); i!=current_map_.distances.end();i++) {
+     avg_ += (*i - avg_) / t;
+     if (*i > max_) {
+       max_ = *i;
+     }
+     ++t;
+  }
   // updated via signal in case ros spinner is in a different thread
   Q_EMIT mapUpdated();
   loaded_ = true;
 }
 
 
-void MapDisplay::incomingUpdate(const map_msgs::OccupancyGridUpdate::ConstPtr& update)
+void DistMapDisplay::incomingUpdate(const map_msgs::OccupancyGridUpdate::ConstPtr& update)
 {
   // Only update the map if we have gotten a full one first.
   if( !loaded_ )
@@ -500,8 +418,8 @@ void MapDisplay::incomingUpdate(const map_msgs::OccupancyGridUpdate::ConstPtr& u
   // Reject updates which have any out-of-bounds data.
   if( update->x < 0 ||
       update->y < 0 ||
-      current_map_.info.width < update->x + update->width ||
-      current_map_.info.height < update->y + update->height )
+      current_map_.grid_info.size_x< update->x + update->width ||
+      current_map_.grid_info.size_y < update->y + update->height )
   {
     setStatus( StatusProperty::Error, "Update", "Update area outside of original map area." );
     return;
@@ -510,7 +428,7 @@ void MapDisplay::incomingUpdate(const map_msgs::OccupancyGridUpdate::ConstPtr& u
   // Copy the incoming data into current_map_'s data.
   for( size_t y = 0; y < update->height; y++ )
   {
-    memcpy( &current_map_.data[ (update->y + y) * current_map_.info.width + update->x ],
+    memcpy( &current_map_.distances[ (update->y + y) * current_map_.grid_info.size_x + update->x ],
             &update->data[ y * update->width ],
             update->width );
   }
@@ -518,23 +436,19 @@ void MapDisplay::incomingUpdate(const map_msgs::OccupancyGridUpdate::ConstPtr& u
   Q_EMIT mapUpdated();
 }
 
-void MapDisplay::showMap()
+void DistMapDisplay::showMap()
 {
-  if (current_map_.data.empty())
+  float threshold_1 = threshold_color_->getFloat();
+  float threshold_2 = threshold_2_color_->getFloat();
+  if (current_map_.distances.empty())
   {
     return;
   }
 
-  if( !validateFloats( current_map_ ))
-  {
-    setStatus( StatusProperty::Error, "Map", "Message contained invalid floating point values (nans or infs)" );
-    return;
-  }
-
-  if( current_map_.info.width * current_map_.info.height == 0 )
+  if( current_map_.grid_info.size_y * current_map_.grid_info.size_x == 0 )
   {
     std::stringstream ss;
-    ss << "Map is zero-sized (" << current_map_.info.width << "x" << current_map_.info.height << ")";
+    ss << "Map is zero-sized (" << current_map_.grid_info.size_x << "x" << current_map_.grid_info.size_y << ")";
     setStatus( StatusProperty::Error, "Map", QString::fromStdString( ss.str() ));
     return;
   }
@@ -542,28 +456,26 @@ void MapDisplay::showMap()
   setStatus( StatusProperty::Ok, "Message", "Map received" );
 
   ROS_DEBUG( "Received a %d X %d map @ %.3f m/pix\n",
-             current_map_.info.width,
-             current_map_.info.height,
-             current_map_.info.resolution );
+             current_map_.grid_info.size_x,
+             current_map_.grid_info.size_y,
+             current_map_.map_to_grid.resolution );
 
-  float resolution = current_map_.info.resolution;
+  float resolution = current_map_.map_to_grid.resolution;
 
-  int width = current_map_.info.width;
-  int height = current_map_.info.height;
+  int width = current_map_.grid_info.size_x;
+  int height = current_map_.grid_info.size_y;
 
 
-  Ogre::Vector3 position( current_map_.info.origin.position.x,
-                          current_map_.info.origin.position.y,
-                          current_map_.info.origin.position.z );
-  Ogre::Quaternion orientation( current_map_.info.origin.orientation.w,
-                                current_map_.info.origin.orientation.x,
-                                current_map_.info.origin.orientation.y,
-                                current_map_.info.origin.orientation.z );
-  frame_ = current_map_.header.frame_id;
-  if (frame_.empty())
-  {
-    frame_ = "/map";
-  }
+  Ogre::Vector3 position( current_map_.map_to_grid.origin_x,
+                          current_map_.map_to_grid.origin_y,
+                          0 );
+  Ogre::Quaternion orientation( 0,
+                                0,
+                                0,
+                                1 );
+
+  // TODO: Add a header to the Map Msg. Otherwise assume this
+  frame_ = "/map";
 
   unsigned int pixels_size = width * height;
   unsigned char* pixels = new unsigned char[pixels_size];
@@ -571,23 +483,38 @@ void MapDisplay::showMap()
 
   bool map_status_set = false;
   unsigned int num_pixels_to_copy = pixels_size;
-  if( pixels_size != current_map_.data.size() )
+  if( pixels_size != current_map_.distances.size() )
   {
     std::stringstream ss;
     ss << "Data size doesn't match width*height: width = " << width
-       << ", height = " << height << ", data size = " << current_map_.data.size();
+       << ", height = " << height << ", data size = " << current_map_.distances.size();
     setStatus( StatusProperty::Error, "Map", QString::fromStdString( ss.str() ));
     map_status_set = true;
 
     // Keep going, but don't read past the end of the data.
-    if( current_map_.data.size() < pixels_size )
+    if( current_map_.distances.size() < pixels_size )
     {
-      num_pixels_to_copy = current_map_.data.size();
+      num_pixels_to_copy = current_map_.distances.size();
     }
   }
 
-  memcpy( pixels, &current_map_.data[0], num_pixels_to_copy );
-
+  float max = float(max_);
+  for(int i=0; i<num_pixels_to_copy; i++) {
+	 float distance = float(current_map_.distances[i]);
+	 if (distance < threshold_1){
+		pixels[i] = (distance * 83.0)/ threshold_1;
+	 }
+	 else if (distance < threshold_2){
+		pixels[i] = 83 + (((distance - threshold_1) * 83.0) / (threshold_2 - threshold_1));
+	 }
+	 else {
+		pixels[i] = 166 + (((distance - threshold_2) * 83.0) / (max - threshold_2));
+	 }
+  }
+  std::stringstream mis;
+  mis << "Max " << max << " Average " << avg_ << " Median " << median_;
+  setStatus( StatusProperty::Ok, "Map Information", QString::fromStdString( mis.str() ));
+ // memcpy( pixels, &current_map_.distances[0], num_pixels_to_copy );
   Ogre::DataStreamPtr pixel_stream;
   pixel_stream.bind( new Ogre::MemoryDataStream( pixels, pixels_size ));
 
@@ -599,7 +526,7 @@ void MapDisplay::showMap()
 
   static int tex_count = 0;
   std::stringstream ss;
-  ss << "MapTexture" << tex_count++;
+  ss << "DistMapTexture" << tex_count++;
   try
   {
     texture_ = Ogre::TextureManager::getSingleton().loadRawData( ss.str(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
@@ -675,7 +602,7 @@ void MapDisplay::showMap()
   context_->queueRender();
 }
 
-void MapDisplay::updatePalette()
+void DistMapDisplay::updatePalette()
 {
   int palette_index = color_scheme_property_->getOptionInt();
 
@@ -695,7 +622,7 @@ void MapDisplay::updatePalette()
   updateAlpha();
 }
 
-void MapDisplay::transformMap()
+void DistMapDisplay::transformMap()
 {
   if (!loaded_)
   {
@@ -704,7 +631,15 @@ void MapDisplay::transformMap()
 
   Ogre::Vector3 position;
   Ogre::Quaternion orientation;
-  if (!context_->getFrameManager()->transform(frame_, ros::Time(), current_map_.info.origin, position, orientation))
+  geometry_msgs::Point point;
+  point.x = current_map_.map_to_grid.origin_x;
+  point.y = current_map_.map_to_grid.origin_y;
+  point.z =  0.0;
+  geometry_msgs::Quaternion q;
+  geometry_msgs::Pose origin;
+  origin.position = point;
+  origin.orientation = q;
+  if (!context_->getFrameManager()->transform(frame_, ros::Time(), origin, position, orientation))
   {
     ROS_DEBUG( "Error transforming map '%s' from frame '%s' to frame '%s'",
                qPrintable( getName() ), frame_.c_str(), qPrintable( fixed_frame_ ));
@@ -721,12 +656,12 @@ void MapDisplay::transformMap()
   scene_node_->setOrientation( orientation );
 }
 
-void MapDisplay::fixedFrameChanged()
+void DistMapDisplay::fixedFrameChanged()
 {
   transformMap();
 }
 
-void MapDisplay::reset()
+void DistMapDisplay::reset()
 {
   Display::reset();
 
@@ -735,16 +670,16 @@ void MapDisplay::reset()
   updateTopic();
 }
 
-void MapDisplay::setTopic( const QString &topic, const QString &datatype )
+void DistMapDisplay::setTopic( const QString &topic, const QString &datatype )
 {
   topic_property_->setString( topic );
 }
 
-void MapDisplay::update( float wall_dt, float ros_dt ) {
+void DistMapDisplay::update( float wall_dt, float ros_dt ) {
   transformMap();
 }
 
 } // namespace rviz
 
 #include <pluginlib/class_list_macros.h>
-PLUGINLIB_EXPORT_CLASS( rviz::MapDisplay, rviz::Display )
+PLUGINLIB_EXPORT_CLASS( rviz::DistMapDisplay, rviz::Display )

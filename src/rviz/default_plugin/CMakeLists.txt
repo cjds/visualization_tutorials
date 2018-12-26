@@ -18,6 +18,7 @@ set(SOURCE_FILES
   interactive_markers/interactive_marker.cpp
   laser_scan_display.cpp
   map_display.cpp
+  dist_map_display.cpp
   marker_array_display.cpp
   marker_display.cpp
   markers/arrow_marker.cpp
